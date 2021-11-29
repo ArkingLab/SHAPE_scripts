@@ -12,10 +12,6 @@ opts_knit$set(root.dir = "~/jhpce/dcs01/arking/arkinglab/active/projects/mito/SH
 ```
 
 ```{r}
-# location of plate maps for sequenom: /dcs01/arking/arkinglab/active/projects/mito/SHAPE/SHAPE MassArray Sequenom Plate-Maps
-```
-
-```{r}
 library(readxl)
 
 plates1_4 <- read_excel("/Volumes/JHPCE 2/dcs01/static/mito/SHAPE/Sequenom/SHAPE MassArray Sequenom 3.29.18/PlateData_SHAPE 1-4_March 2018.xlsx", 
@@ -96,16 +92,16 @@ p + geom_text(data = labs, aes(Missing.Percent, y = 0.1, label = Assay.Id, vjust
 no_alb = no_nas[-grep('albumin', no_nas$Assay.Id),]
 unique(no_alb$Assay.Id) %>% length
 
-no_alb %>% group_by(Subj.Vis) %>% summarise(Count = n()) -> hi
+no_alb %>% group_by(Subj.Vis) %>% summarise(Count = n()) -> df
 
-hi$Missing.Percent = (hi$Count/47) * 100
+df$Missing.Percent = (df$Count/47) * 100
 
-p = ggplot(hi, aes(Missing.Percent)) + geom_density() + geom_rug() + ggtitle('Missingness by individual sample')
+p = ggplot(df, aes(Missing.Percent)) + geom_density() + geom_rug() + ggtitle('Missingness by individual sample')
 
-labs = subset(hi, Missing.Percent < 45 | Missing.Percent > 100)
+labs = subset(df, Missing.Percent < 45 | Missing.Percent > 100)
 p + geom_text(data = labs, aes(Missing.Percent, y = 0.1, label = Subj.Vis, vjust = -0.5), angle = 90, col = 'black') + geom_vline(xintercept = labs$Missing.Percent, lty = 2, colour = "gray50")
 
-only_reason = subset(hi, Missing.Percent <= 100)
+only_reason = subset(df, Missing.Percent <= 100)
 p2 = ggplot(only_reason, aes(Missing.Percent)) + geom_density() + geom_rug() + ggtitle('Missingness by individual sample')
 labs2 = subset(only_reason, Missing.Percent < 50)
 p2 + geom_text(data = labs2, aes(Missing.Percent, y = 0.1, label = Subj.Vis, vjust = -0.5), angle = 90, col = 'black') + geom_vline(xintercept = labs2$Missing.Percent, lty = 2, colour = "gray50") + theme_classic()
@@ -212,7 +208,6 @@ for(i in 1:length(unique(sequenom_data2$Subject)))
 
 results$Percent.synonymous <- (results$Synonymous.calls/results$Overlapping.calls)
 
-# make pretty
 View(results[, 1:4])
 
 p = ggplot(results, aes(Percent.synonymous)) + geom_rug() + geom_density()
