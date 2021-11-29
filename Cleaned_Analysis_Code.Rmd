@@ -1,0 +1,833 @@
+# 11.21.2021
+
+# This code is used for analyzing the SHAPE data. 
+
+# Load libraries
+```{r setup}
+# This will set the working directory 
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+library(here)
+here::i_am('key')
+# knitr::opts_knit$set(root.dir = here())
+library(readxl)
+library(tidyverse)
+library(plyr)
+library(patchwork)
+library(ggthemes)
+library(viridis)
+library(ggplot2)
+library(data.table)
+library(magrittr)
+library(yangR)
+library(viridis)
+library(lme4)
+library(ggthemes)
+```
+
+# Plotting functions:
+```{r}
+formatbeta = function (beta) 
+{
+    formatC(round(beta, 3), 3, format = "f")
+}
+
+formatpval = function (pval) 
+{
+    ifelse(pval > 0.001, format(round(pval, 2), nsmall = 2), 
+        formatC(pval, format = "e", digits = 2))
+}
+
+plot_lm = function(data, x, y){
+  require(yangR)
+  require(magrittr)
+  require(ggthemes)
+  lm(as.formula(paste0(y , '~', x)), data) %>% summary %>% coef -> coefs
+  beta = formatbeta(coefs[2,1])
+  p = formatpval(coefs[2,4])
+  ggplot(data, aes_string(x, y)) + geom_point() + geom_smooth(method = 'lm') + ggtitle(paste0('Effect estimate = ', beta, ', p-value = ', p)) + theme_classic()
+}
+
+plot_box = function(data, x, y){
+  require(yangR)
+  require(magrittr)
+  require(ggthemes)
+  t.test(as.formula(paste0(x , '~', y)), data = data, na.action = na.exclude) -> coefs
+  beta = formatbeta(diff(coefs$estimate))
+  p = formatpval(coefs$p.value)
+  ggplot(data, aes_string(y, x)) + geom_boxplot() + geom_point() + ggtitle(paste0('Effect estimate = ', beta, ', p-value = ', p)) + theme_classic() + stat_summary(fun.data = give.n, geom = 'text')
+}
+```
+
+# Read in data:
+```{r}
+alb1 = read_excel("/Volumes/JHPCE/dcs01/static/mito/SHAPE/qPCR/Monochrome/01122021_SHAPE1ALB.xlsx", sheet = "Results", skip = 37)
+dlp1 = read_excel("/Volumes/JHPCE/dcs01/static/mito/SHAPE/qPCR/Monochrome/01122021_SHAPE1DLP.xlsx", sheet = "Results", skip = 37)
+
+  alb1 = alb1[-(385:389),]
+  dlp1 = dlp1[-(385:389),]
+  alb1$Alb_CT = as.numeric(alb1$CT)
+  dlp1$Dlp_CT = as.numeric(dlp1$CT)
+  df = merge(dlp1, alb1, by = c('Well Position', 'Sample Name'))
+
+  colnames(df) = make.names(colnames(df))
+  
+  df$Row = substr(df$`Well.Position`, 1, 1)
+  df$Col = as.numeric(substr(df$`Well.Position`, 2, 4))
+  df$deltaCT = df$Alb_CT - df$Dlp_CT
+  
+  df$Original.Plate = 0
+  
+  df$Original.Plate[which(df$Row %in% c('A', 'C', 'E', 'G', 'I', 'K', 'M', 'O') & df$Col %in% 1:12)] = 1
+  df$Original.Plate[which(df$Row %in% c('B', 'D', 'F', 'H', 'J', 'L', 'N', 'P') & df$Col %in% 1:12)] = 2
+  df$Original.Plate[which(df$Row %in% c('A', 'C', 'E', 'G', 'I', 'K', 'M', 'O') & df$Col %in% 13:24)] = 3
+  df$Original.Plate[which(df$Row %in% c('B', 'D', 'F', 'H', 'J', 'L', 'N', 'P') & df$Col %in% 13:24)] = 4
+
+  p1 = subset(df, Original.Plate == 1)
+p2 = subset(df, Original.Plate == 2)
+p3 = subset(df, Original.Plate == 3)
+p4 = subset(df, Original.Plate == 4)
+
+p1$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+p2$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+p3$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+p4$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+
+p1$Old.Col = as.numeric(p1$Col)
+p2$Old.Col = as.numeric(p2$Col)
+p3$Old.Col = as.numeric(p3$Col) - 12
+p4$Old.Col = as.numeric(p4$Col) - 12
+
+all = rbind(p1, p2, p3, p4)
+all$Old.Well = paste0(all$Old.Row, all$Old.Col)
+```
+
+## Add Sample Names to data
+### Plate 1
+```{r}
+key = as.data.frame(read_excel("/Volumes/JHPCE/dcs01/static/mito/SHAPE/qPCR/Monochrome/SHAPE Biomek 4000 Final Excel Sheet.1-13-2021.xlsx"))
+colnames(key) = make.names(colnames(key))
+
+mono.plate1 = subset(key, X96.well.Dilution.Plate.Name %in% c(paste0('SHAPEDilutionPlate', 1:4)))
+mono.plate1$Original.Plate = as.numeric(substr(mono.plate1$X96.well.Dilution.Plate.Name, 19, 20))
+
+w.key = merge(all, mono.plate1, by.x = c('Original.Plate', 'Old.Well'), by.y = c('Original.Plate', 'well.Location.in.96.well.Dilution.plate..Random.')) # all good.
+w.key.1 = w.key
+```
+
+### Plate 2
+```{r}
+
+alb1 = read_excel("/Volumes/JHPCE/dcs01/static/mito/SHAPE/qPCR/Monochrome/01122021_SHAPE2_ALB.xlsx", sheet = "Results", skip = 37)
+dlp1 = read_excel("/Volumes/JHPCE/dcs01/static/mito/SHAPE/qPCR/Monochrome/01122021_SHAPE2_DLP.xlsx", sheet = "Results", skip = 37)
+
+alb1 = alb1[-(385:389),]
+dlp1 = dlp1[-(385:389),]
+alb1$Alb_CT = as.numeric(alb1$CT)
+dlp1$Dlp_CT = as.numeric(dlp1$CT)
+df = merge(dlp1, alb1, by = c('Well Position', 'Sample Name'))
+
+colnames(df) = make.names(colnames(df))
+
+df$Row = substr(df$`Well.Position`, 1, 1)
+df$Col = as.numeric(substr(df$`Well.Position`, 2, 4))
+df$deltaCT = df$Alb_CT - df$Dlp_CT
+
+df$Original.Plate = 0
+
+df$Original.Plate[which(df$Row %in% c('A', 'C', 'E', 'G', 'I', 'K', 'M', 'O') & df$Col %in% 1:12)] = 1
+df$Original.Plate[which(df$Row %in% c('B', 'D', 'F', 'H', 'J', 'L', 'N', 'P') & df$Col %in% 1:12)] = 2
+df$Original.Plate[which(df$Row %in% c('A', 'C', 'E', 'G', 'I', 'K', 'M', 'O') & df$Col %in% 13:24)] = 3
+df$Original.Plate[which(df$Row %in% c('B', 'D', 'F', 'H', 'J', 'L', 'N', 'P') & df$Col %in% 13:24)] = 4
+
+p1 = subset(df, Original.Plate == 1)
+p2 = subset(df, Original.Plate == 2)
+p3 = subset(df, Original.Plate == 3)
+p4 = subset(df, Original.Plate == 4)
+
+p1$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+p2$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+p3$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+p4$Old.Row = rep(c('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'), each = 12)
+
+p1$Old.Col = as.numeric(p1$Col)
+p2$Old.Col = as.numeric(p2$Col)
+p3$Old.Col = as.numeric(p3$Col) - 12
+p4$Old.Col = as.numeric(p4$Col) - 12
+
+all = rbind(p1, p2, p3, p4)
+all$Old.Well = paste0(all$Old.Row, all$Old.Col)
+
+# add sample names to data for plate 2
+mono.plate2 = subset(key, X96.well.Dilution.Plate.Name %in% c(paste0('SHAPEDilutionPlate', 5:8)))
+mono.plate2$Original.Plate = as.numeric(substr(mono.plate2$X96.well.Dilution.Plate.Name, 19, 20)) - 4
+w.key = merge(all, mono.plate2, by.x = c('Original.Plate', 'Old.Well'), by.y = c('Original.Plate', 'well.Location.in.96.well.Dilution.plate..Random.')) # all good.
+w.key.2 = w.key
+```
+
+# Combine 1 + 2
+```{r}
+w.key.1.trim = dplyr::select(w.key.1, Subject, Visit, deltaCT)
+w.key.2.trim = dplyr::select(w.key.2, Subject, Visit, deltaCT)
+w.key.1.trim$Monochrome.Plate = 1
+w.key.2.trim$Monochrome.Plate = 2
+all.shape.data = rbind(w.key.1.trim, w.key.2.trim)
+saveRDS(all.shape.data, file = '/Volumes/JHPCE/SHAPE/R_objects/all.shape.data.rds')
+```
+  
+# QC starts
+```{r}
+all.shape.data = readRDS('R_objects/all.shape.data.rds')
+```
+
+## Remove deltaCT too low:
+```{r}
+fail_mono = subset(all.shape.data, deltaCT < 7)
+
+# table(fail_mono$Subject)
+# View(subset(all.shape.data, Subject %in% c(2001, 2039, 2066, 2087, 2195, 3110, 5091, 5104)))
+```
+
+## Remove genetic fingerprinting failures:
+```{r}
+bad1 = readRDS('R_objects/bad_samples1.rds')
+bad2 = readRDS('R_objects/bad_samples2.rds')
+bad3 = readRDS('R_objects/bad_samples3.rds')
+bad1 = substr(bad1, 1, 4)
+
+bad = unique(c(bad1, bad2$Subject))
+```
+
+## Remove bad data
+```{r}
+bad.data = subset(all.shape.data, deltaCT < 7)
+no.bad.data = subset(all.shape.data, deltaCT >= 7)
+
+no.bad.data.sequenom = subset(no.bad.data, Subject %!in% bad)
+no.bad.data.sequenom$Subj.Vis = paste(no.bad.data.sequenom$Subject, no.bad.data.sequenom$Visit)
+no.bad.data.sequenom2 = subset(no.bad.data.sequenom, Subj.Vis %!in% bad3)
+
+library(lme4)
+lmer(deltaCT ~ (1|Monochrome.Plate), no.bad.data.sequenom2) %>% summary
+
+no.bad.data.sequenom2$deltaCT_PlateAdjust <- scale(resid(lmer(deltaCT ~ (1|Monochrome.Plate), no.bad.data.sequenom2)))
+
+ggplot(no.bad.data.sequenom2, aes(deltaCT, col = as.factor(Monochrome.Plate))) + geom_density()
+ggplot(no.bad.data.sequenom2, aes(deltaCT_PlateAdjust, col = as.factor(Monochrome.Plate))) + geom_density()
+```
+
+## Adjust for plate effects
+```{r}
+no.bad.data.sequenom = no.bad.data.sequenom2
+w.key.1.trim.bl = subset(no.bad.data.sequenom, Visit == 'Baseline')
+w.key.1.trim.fi = subset(no.bad.data.sequenom, Visit == 'Final')
+quicklook = merge(w.key.1.trim.bl, w.key.1.trim.fi, by = 'Subject', suffixes = c('_BL', '_Final'), all.x = T, all.y = T)
+
+quicklook$Study = as.factor(substr(quicklook$Subject, 1, 1))
+```
+
+## Save cleaned data
+```{r}
+# saveRDS(quicklook, file = 'R_objects/data.cleaned.rds')
+```
+
+# Make Table 1:
+```{r}
+library(htmlTable)
+show = data.frame(Study = c('SHAPE3', 'SHAPE5'), N = c('77', '77'), Comorbidities = c('Overweight/obese + prediabetes/diabetes', 'Obese, otherwise healthy'), Group1 = c('Diet', 'Exercise + Low CHO'), Group2 = c('Diet + Exercise', 'Exercise + Low Fat'), Completed = c(55, 60), `Drop Out/Withdrew` = c(22, 17))
+library(openxlsx)
+# write.xlsx(show, file = '~/Dropbox/SHAPE_Paper/Table1.xlsx')
+
+pheno = as.data.frame(read.table('/Volumes/JHPCE/dcs01/static/mito/SHAPE/phenotypes/new_phenotypes_3.26.18/phenoshapetotal.txt', header = T, sep = '\t'))
+pheno %>% mutate(Study_Status = paste(Study, Study.Status)) %>% filter(Study != 'Shape2') -> filtered
+table(filtered$Study_Status)
+```
+
+# Add phenotypes, create mtDNA-CN change variable
+```{r}
+shape.data = readRDS('../R_objects/data.cleaned.rds')
+pheno = as.data.frame(read.table('../../../../static/mito/SHAPE/phenotypes/new_phenotypes_3.26.18/phenoshapetotal.txt', header = T, sep = '\t'))
+shape.data$Study = paste0('Shape', shape.data$Study)
+w.pheno = merge(shape.data, pheno, by.x = c('Subject', 'Study'), by.y = c('ID', 'Study'))
+table(w.pheno$Study)
+table(w.pheno$Study.Status)
+w.pheno$Final_minus_BL = w.pheno$deltaCT_PlateAdjust_Final - w.pheno$deltaCT_PlateAdjust_BL
+```
+
+
+## Remove SHAPE2 and outlier individual
+```{r}
+w.pheno = subset(w.pheno, Study != 'Shape2')
+# remove outlier individual
+w.pheno = w.pheno[-unique(find.outliers(w.pheno$deltaCT_BL), find.outliers(w.pheno$deltaCT_Final)),]
+
+w.pheno$Sex = ifelse(w.pheno$Male == 1, "Male", "Female")
+
+saveRDS(w.pheno, file = '../final_shape3shape5.rds')
+```
+
+# Load dataframe:
+```{r}
+w.pheno = readRDS('../final_shape3shape5.rds')
+```
+
+
+# Examine known associations
+## Age and sex
+```{r}
+sexplot = plot_box(w.pheno, 'deltaCT_PlateAdjust_BL', 'Sex') + ylab('Baseline mtDNA-CN')
+
+library(splines)
+lm(deltaCT_PlateAdjust_BL ~ Age, data = w.pheno) %>% summary
+lm(deltaCT_PlateAdjust_BL ~ ns(Age, 2), data = w.pheno) %>% summary
+ns(w.pheno$Age, 2)
+
+m1 = lm(deltaCT_PlateAdjust_BL ~ Sex, data = w.pheno)
+m2 = lm(deltaCT_PlateAdjust_BL ~ Sex + Age, data = w.pheno)
+
+m3.5 = lm(deltaCT_PlateAdjust_BL ~ ns(Age, 2), data = w.pheno)
+m3 = lm(deltaCT_PlateAdjust_BL ~ Sex + ns(Age, 2), data = w.pheno)
+
+anova(m2, m3)
+
+install.packages('lmtest')
+library(lmtest)
+A = logLik(m1)
+B = logLik(m2)
+(teststat <- -2 * (as.numeric(A)-as.numeric(B)))
+(p.val <- pchisq(teststat, df = 1, lower.tail = FALSE))
+
+A = logLik(m3.5)
+B = logLik(m3)
+(teststat <- -2 * (as.numeric(A)-as.numeric(B)))
+(p.val <- pchisq(teststat, df = 1, lower.tail = FALSE))
+
+
+ageplot = ggplot(w.pheno, aes(Age, deltaCT_PlateAdjust_BL)) + geom_point() + geom_smooth(method = lm, formula = y ~ ns(x, 2)) + ylab('Baseline mtDNA-CN') + theme_classic() + ggtitle('Spline at 52.6 years')
+
+# ageplot = plot_lm(w.pheno, 'Age', 'deltaCT_PlateAdjust_BL')
+# plot_lm(subset(w.pheno, Age >= 50), 'Age', 'deltaCT_PlateAdjust_BL')
+
+library(patchwork)
+sexplot + (ageplot + theme(axis.title.y=element_blank()))
+
+length(na.omit(w.pheno$deltaCT_PlateAdjust_BL))
+# saveRDS(w.pheno, 'R_objects/final_shape35_dataset.rds')
+```
+
+## Stratify by study
+```{r}
+ggplot(subset(w.pheno, Study == 'Shape3'), aes(Age, deltaCT_PlateAdjust_BL)) + geom_point() +     geom_smooth(method = lm, formula = y ~ ns(x, 2)) + ylab('Baseline mtDNA-CN') + theme_classic() + ggtitle('SHAPE3')
+ggplot(subset(w.pheno, Study == 'Shape5'), aes(Age, deltaCT_PlateAdjust_BL)) + geom_point() +     geom_smooth(method = lm, formula = y ~ ns(x, 2)) + ylab('Baseline mtDNA-CN') + theme_classic() + ggtitle('SHAPE5')
+lm(deltaCT_PlateAdjust_BL ~ ns(Age, 2), data = subset(w.pheno, Study == 'Shape5')) %>% summary
+lm(deltaCT_PlateAdjust_BL ~ ns(Age, 2), data = subset(w.pheno, Study == 'Shape3')) %>% summary
+
+sex3 = plot_box(subset(w.pheno, Study == 'Shape3'), 'deltaCT_PlateAdjust_BL', 'Sex') + ylab('Baseline mtDNA-CN') + ggtitle('')
+sex5 = plot_box(subset(w.pheno, Study == 'Shape5'), 'deltaCT_PlateAdjust_BL', 'Sex') + ylab('Baseline mtDNA-CN') +ggtitle('')
+
+age3 = ggplot(subset(w.pheno, Study == 'Shape3'), aes(Age, deltaCT_PlateAdjust_BL)) + geom_point() + geom_smooth(method = lm, formula = y ~ ns(x, 2)) + ylab('Baseline mtDNA-CN') + theme_classic()
+
+age5 = ggplot(subset(w.pheno, Study == 'Shape5'), aes(Age, deltaCT_PlateAdjust_BL)) + geom_point() + geom_smooth(method = lm, formula = y ~ ns(x, 2)) + ylab('Baseline mtDNA-CN') + theme_classic()
+(sex3+sex5)/(age3+age5)
+```
+
+# Correlation between BL and Final
+```{r}
+cor(w.pheno$deltaCT_PlateAdjust_BL, w.pheno$deltaCT_Final, use = 'complete.obs')
+lm(deltaCT_PlateAdjust_BL~deltaCT_Final, data = w.pheno) %>% summary
+# Make a plot showing correlations between baseline and final!
+which(complete.cases(dplyr::select(w.pheno, deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final)) == T) %>% length
+
+p = ggplot(w.pheno, aes(deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final, col = `Study`)) + geom_point() + ggtitle('Pearson correlation = 0.578') + xlab('Baseline mtDNA-CN') + ylab('Final mtDNA-CN') + geom_smooth(method = 'lm') + scale_color_viridis_d() + theme_classic()
+p
+```
+
+## By study
+```{r}
+plot_box(w.pheno, 'deltaCT_PlateAdjust_BL', 'Study') + ylab('Baseline mtDNA-CN')
+```
+
+# Dropouts 
+```{r}
+w.pheno$Completed = ifelse(w.pheno$Completed == 0, 'No', 'Yes')
+w.pheno$Completed = as.factor(w.pheno$Completed)
+
+cor(as.numeric(w.pheno$Completed2), w.pheno$deltaCT_PlateAdjust_BL, use = 'complete.obs')
+
+plot_box(w.pheno, 'deltaCT_PlateAdjust_BL', 'Completed') + xlab('Completed') + ylab('Baseline mtDNA-CN')
+
+shape3 = plot_box(subset(w.pheno, Study == 'Shape3'), 'deltaCT_PlateAdjust_BL', 'Completed') + xlab('Completed') + ylab('Baseline mtDNA-CN')
+
+shape5 = plot_box(subset(w.pheno, Study == 'Shape5'), 'deltaCT_PlateAdjust_BL', 'Completed') + xlab('Completed') + ylab('Baseline mtDNA-CN')
+
+# Supplemental Figure 5 
+shape3 + shape5 
+
+dropout_plot = plot_box(w.pheno, 'deltaCT_PlateAdjust_BL', 'Completed') + xlab('Completed') + ylab('Baseline mtDNA-CN')
+
+t.test(w.pheno$deltaCT_PlateAdjust_BL ~ w.pheno$Completed)
+```
+
+## Study Status
+```{r}
+lm(deltaCT_PlateAdjust_BL ~ Study.Status, data = w.pheno) %>% summary
+
+# Only one person withdrew, so vast majority is dropouts
+```
+
+## Test Study Dropout against all available variables
+```{r}
+w.pheno2 = w.pheno[, -c(6, 11)]
+w.pheno2$ENDOAI_D = NULL
+w.pheno2$ENDOAI_P = NULL
+
+save = as.data.frame(matrix(nrow = 1, ncol = 3))
+colnames(save) = c('VarName', 'estimate', 'p.value')
+to_test = colnames(w.pheno2)
+for(i in 1:length(to_test)){
+  var = to_test[i]
+  outcome = ifelse(w.pheno2$Completed == 1, TRUE, FALSE) 
+  predict = w.pheno2[,i]
+  if(length(levels(as.factor(predict))) > 1){
+    fit = lm(outcome ~ predict)
+    fit = glm(outcome ~ predict, family = 'binomial')
+    tidyfit = broom::tidy(fit)
+    if(tidyfit$p.value[2] < 0.05){
+      print(var)
+      print(tidyfit$p.value[2])
+      save = rbind(save, c(var, tidyfit$estimate[2], tidyfit$p.value[2]))
+    }
+  }
+}
+
+save = na.omit(save)
+
+# Take out variables that are for later -->
+save_new = save[-c(union(grep('6', save$VarName), grep('_D', save$VarName))),]
+
+save_new2 = save_new[-union(grep('Attend', save_new$VarName), grep('LOG', save_new$VarName)),]
+
+save_3 = save_new2[c(1, 2, 3, 6, 7, 8, 9, 10, 14), ]
+```
+
+### Dropout Table
+```{r}
+save_3$VarName
+save_3$estimate = formatbeta(as.numeric(save_3$estimate))
+save_3$p.value = formatpval(as.numeric(save_3$p.value))
+
+library(htmlTable)
+htmlTable(save_3[-c(1),], rnames = rep('', nrow(save_3)))
+```
+
+### Correlation Plot
+```{r}
+pairs(~Completed + deltaCT_PlateAdjust_BL + Age + SLEEPTimeWorkday0 + IVRT_0 + INF_Gamma.MSD_0, data = w.pheno2, lower.panel=twolines, diag.panel=mydiag.panel, upper.panel=panel.cor, label.pos=0.5, main="Correlation matrix", labels = c('Dropout', 'mtDNA', 'Age', 'Sleep', 'IVRT', 'IFN Gamma'))
+
+pairs(~Completed + deltaCT_PlateAdjust_BL + Resistance.Volume.Program.Half_1 + Resistance.Volume.Program.Half_2 + Age + SLEEPTimeWorkday0 + IVRT_0 + INF_Gamma.MSD_0, data = w.pheno2, lower.panel=twolines, diag.panel=mydiag.panel, upper.panel=panel.cor, label.pos=0.5, main="Correlation matrix", labels = c('Dropout', 'mtDNA', 'ResistanceVol1', 'ResistanceVol2', 'Age', 'Sleep', 'IVRT', 'IFN Gamma'))
+
+```
+
+### Dropouts and vo2max, insulin resistance
+```{r}
+plot_box(w.pheno, 'QUICKI0', 'Completed')
+plot_box(w.pheno, 'ETTVO2kg0', 'Completed')
+plot_lm(w.pheno, 'Exercise', 'Completed')
+
+glm(Completed ~ Exercise,family=binomial(link='logit'),data=w.pheno) %>% summary
+
+table(w.pheno$Completed, w.pheno$Exercise)
+```
+
+### Stratify by study
+```{r}
+s3 = plot_box(subset(w.pheno, Study == 'Shape3'), 'deltaCT_PlateAdjust_BL', 'Completed') + xlab('Completed') + ylab('Baseline mtDNA-CN') 
+s5 = plot_box(subset(w.pheno, Study == 'Shape5'), 'deltaCT_PlateAdjust_BL', 'Completed') + xlab('Completed') + ylab('Baseline mtDNA-CN') 
+s3 + s5
+```
+
+# Insulin resistance
+```{r}
+w.pheno$QUICKI0_diabetes = resid(lm(QUICKI0 ~ as.factor(Diabetes), data = w.pheno, na.action = na.exclude))
+w.pheno$QUICKI6_diabetes = resid(lm(QUICKI6 ~ as.factor(Diabetes), data = w.pheno, na.action = na.exclude))
+
+ins_mt = plot_lm(w.pheno, 'deltaCT_PlateAdjust_BL', 'QUICKI0_diabetes') + xlab('Baseline mtDNA-CN') + ylab('Insulin sensitivity (adjusted for diabetes)')
+ins_mt_final = plot_lm(w.pheno, 'deltaCT_PlateAdjust_Final', 'QUICKI6_diabetes') + xlab('6 month mtDNA-CN') + ylab('6 month insulin sensitivity (adjusted for diabetes)')
+ins_mt + ins_mt_final
+
+# linear mixed model
+for_mix = dplyr::select(w.pheno, Subject, Study, deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final, QUICKI0, QUICKI6, Diabetes)
+
+for_mix %>% dplyr::select(Subject, Study, Diabetes, QUICKI0, QUICKI6) %>% gather(Visit, Sensitivity, c(QUICKI0, QUICKI6)) -> ins_gather
+
+for_mix %>% dplyr::select(Subject, Study, Diabetes, deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final) %>% gather(Visit, mtDNA_CN, c(deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final)) -> mt_gather
+
+mt_gather$Visit = ifelse(mt_gather$Visit == 'deltaCT_PlateAdjust_Final', 'Final', 'BL')
+                                            
+ins_gather$Visit = ifelse(ins_gather$Visit == 'QUICKI0', 'BL', 'Final')
+mt_gather$Visit = ifelse(mt_gather$Visit == 'deltaCT_PlateAdjust_BL', 'BL', 'Final')
+
+full_gather = merge(ins_gather, mt_gather)
+
+ggplot(full_gather, aes(mtDNA_CN, Sensitivity, col = Visit)) + geom_point() + ylab("Insulin Sensitivity")
+
+full_gather$Sensitivity_adj = resid(lm(Sensitivity ~ Diabetes, data = full_gather, na.action = na.exclude))
+
+library(lme4)
+mod = lmer(Sensitivity_adj ~ mtDNA_CN + (1|Visit), data = full_gather) 
+full_gather$Sens_predict = predict(mod, na.action = na.exclude)
+
+# p-val from t-value:
+pt(-3.217795, df = 248)
+
+try2 = ggplot(full_gather, aes(mtDNA_CN, Sensitivity_adj, col = Visit)) + geom_point() + ylab("Insulin Sensitivity (adjusted for Diabetes status)") + scale_color_viridis_d() + theme_classic() + geom_line(data = full_gather, aes(mtDNA_CN, Sens_predict)) + ggtitle('P-value for mixed linear model: 7.32e-4')
+```
+
+# Baseline vs. Change
+```{r}
+w.pheno$mtDNA_change = w.pheno$deltaCT_PlateAdjust_Final - w.pheno$deltaCT_PlateAdjust_BL
+
+plot_lm(w.pheno, 'deltaCT_PlateAdjust_BL', 'mtDNA_change') + xlab('Baseline mtDNA-CN') + ylab('Change in mtDNA-CN after 6 months')
+
+# show this better:
+# plot_lm(w.pheno, 'deltaCT_PlateAdjust_BL', 'deltaCT_PlateAdjust_Final') + xlab('Baseline mtDNA-CN') + ylab('Final mtDNA-CN ')
+
+# if you have a negative baseline, you're more likely to increase?
+
+# if you have a positive baseline, you're more likely to decrease?
+
+w.pheno$BL_bin = ifelse(w.pheno$deltaCT_PlateAdjust_BL < 0, 'BL_negative', 'BL_positive')
+w.pheno$change_bin = ifelse(w.pheno$mtDNA_change < 0, 'change_negative', 'change_positive')
+
+table(w.pheno$BL_bin, w.pheno$change_bin)
+```
+
+## Absolute Value
+```{r}
+w.pheno$Abs_BL = abs(w.pheno$deltaCT_PlateAdjust_BL)
+w.pheno$Abs_change = abs(w.pheno$mtDNA_change)
+
+ggplot(subset(w.pheno, change_bin %in% c('change_negative', 'change_positive')), aes(Abs_BL, Abs_change, col = change_bin)) + geom_point() + xlab('Absolute value of baseline mtDNA-CN') + ylab('Absolute value of 6-month change in mtDNA-CN') + theme_classic()
+
+w.pheno$base_times_change = w.pheno$mtDNA_change * w.pheno$deltaCT_PlateAdjust_BL
+
+w.pheno$change_bin2 = ifelse(w.pheno$base_times_change < 0, 'Towards mean', 'Away from mean')
+
+cb1 = ggplot(subset(w.pheno, change_bin %in% c('change_negative', 'change_positive')), aes(Abs_BL, Abs_change, col = change_bin)) + geom_point() + xlab('Absolute value of baseline mtDNA-CN') + ylab('Absolute value of 6-month change in mtDNA-CN') + theme_classic()
+
+# Supplementary Figure XY
+table(w.pheno$change_bin2)
+w.pheno$change_bin2 = factor(w.pheno$change_bin2, levels = c('Towards mean', 'Away from mean'))
+cb2 = ggplot(subset(w.pheno, change_bin %in% c('change_negative', 'change_positive')), aes(Abs_BL, Abs_change, col = change_bin2)) + geom_point() + xlab('Absolute value of baseline mtDNA-CN') + ylab('Absolute value of 6-month change in mtDNA-CN') + theme_classic() + scale_color_viridis(discrete = TRUE, name = 'Direction of change', labels = c('Towards mean (67)', 'Away from mean (38)')) + geom_smooth(method = 'lm', se = F)
+
+(obs - exp)^2/(exp)
+chisq = (67 -52.5)^2/(52.5) + (38-52.5)^2/(52.5)
+pchisq(chisq, 1)
+pchisq(chisq, 1, lower.tail = FALSE)
+# Significant 0.004
+check = subset(w.pheno, change_bin2 == 'Towards mean')
+
+plot_lm(w.pheno, 'Abs_BL', 'Abs_change')
+```
+
+# Exercise sessions
+```{r}
+w.pheno$Exercise.Sessions.Attended2 = ifelse(w.pheno$Completed == 1, w.pheno$Exercise.Sessions.Attended, 0)
+
+w.pheno$Exercise.Sessions.Attended2[which(is.na(w.pheno$Exercise.Sessions.Attended2))] = 0
+
+w.pheno$mtDNA_change = w.pheno$deltaCT_PlateAdjust_Final - w.pheno$deltaCT_PlateAdjust_BL
+w.pheno$Exercise = ifelse(w.pheno$Group %in% c('Diet'), 'No', 'Yes')
+
+w.pheno$mtDNA_change_adjust_BL = resid(lm(mtDNA_change ~ deltaCT_PlateAdjust_BL, data = w.pheno, na.action = na.exclude))
+
+sessionplot = plot_lm(w.pheno, 'Exercise.Sessions.Attended2', 'mtDNA_change_adjust_BL') + xlab('Number of exercise sessions attended') + ylab('6-month change in mtDNA-CN')
+```
+
+## Exclude diabetic individuals
+```{r}
+plot_lm(subset(w.pheno, Diabetes == 'Yes'), 'Exercise.Sessions.Attended2', 'mtDNA_change_adjust_BL') + xlab('Number of exercise sessions attended') + ylab('Change in mtDNA-CN after 6 months')
+
+plot_lm(subset(w.pheno, Diabetes == 'No'), 'Exercise.Sessions.Attended2', 'mtDNA_change_adjust_BL') + xlab('Number of exercise sessions attended') + ylab('Change in mtDNA-CN after 6 months')
+
+# Code people who didn't exercise as zero??
+w.pheno$Exercise.Sessions.Attended2 = ifelse(w.pheno$Completed == 1, w.pheno$Exercise.Sessions.Attended, 0)
+w.pheno$Exercise.Sessions.Attended2 = ifelse(w.pheno$Group == 'Diet', 0, w.pheno$Exercise.Sessions.Attended)
+
+plot_lm(w.pheno, 'Exercise.Sessions.Attended2', 'Final_minus_BL') + xlab('Number of exercise sessions attended') + ylab('Change in mtDNA-CN after 6 months')
+```
+
+### Stratify by study
+```{r}
+plot_lm(subset(w.pheno, Study == 'Shape3'), 'Exercise.Sessions.Attended', 'Final_minus_BL') + xlab('Number of exercise sessions attended') + ylab('Change in mtDNA-CN after 6 months')
+
+plot_lm(subset(w.pheno, Study == 'Shape5'), 'Exercise.Sessions.Attended', 'Final_minus_BL') + xlab('Number of exercise sessions attended') + ylab('Change in mtDNA-CN after 6 months')
+```
+
+## Binary exercise
+```{r}
+explot = plot_box(w.pheno, 'mtDNA_change_adjust_BL', 'Exercise') + xlab('Exercise') + ylab('6-month change in mtDNA-CN') 
+
+explot + (sessionplot + theme(axis.title.y=element_blank()))
+
+lm(mtDNA_change ~ ETTV02kg_D + ETTVO2kg0 +  deltaCT_PlateAdjust_BL, data = w.pheno) %>% summary
+t.test(mtDNA_change ~ Exercise, data = w.pheno)
+# no significant difference
+```
+
+# mtDNA-CN and diabetes
+```{r}
+m1 = lm(mtDNA_change ~ Exercise, data = w.pheno)
+m2 = lm(mtDNA_change ~ Exercise * Diabetes, data = w.pheno)
+anova(m1, m2)
+```
+
+## vo2max
+
+#### baseline/final mixed
+```{r}
+for_mix = dplyr::select(w.pheno, Subject, Study, deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final, ETTVO2kg0, ETTVO2kg6, Diabetes, Age, Sex)
+
+for_mix %>% dplyr::select(Subject, Study, Diabetes, deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final) %>% gather(Visit, mtDNA_CN, c(deltaCT_PlateAdjust_BL, deltaCT_PlateAdjust_Final)) -> mt_gather
+
+for_mix %>% dplyr::select(Subject, Study, Diabetes, ETTVO2kg0, ETTVO2kg6, Age, Sex) %>% gather(Visit, VO2max, c(ETTVO2kg0, ETTVO2kg6)) -> max_gather
+
+max_gather$Visit = ifelse(max_gather$Visit == 'ETTVO2kg0', 'BL', 'Final')
+
+max_mt = merge(max_gather, mt_gather)
+
+ggplot(max_mt, aes(mtDNA_CN, VO2max, col = Visit)) + geom_point() + ylab("VO2max")
+
+library(lme4)
+mod = lmer(VO2max ~ mtDNA_CN + ns(Age, 2) + Sex + Visit + (1|Subject) + Study, data = max_mt) 
+
+max_mt$VO2_predict = predict(mod, na.action = na.exclude)
+summary(mod)
+mod %>% summary %>% coef
+# p-val from t-value:
+pt(-0.1384982, df = 244)
+
+ggplot(max_mt, aes(mtDNA_CN, VO2max, col = Visit)) + geom_point() + ylab("VO2max") + scale_color_viridis_d() + theme_classic() + geom_line(data = max_mt, aes(mtDNA_CN, VO2_predict)) + ggtitle('P-value for mixed linear model: 0.44') + xlab('mtDNA-CN')
+
+lm(ETTV02kg_D ~ ETTVO2kg0, data = w.pheno) %>% summary
+
+plot_lm(w.pheno, 'ETTVO2kg0', 'ETTV02kg_D')
+plot_lm(w.pheno, 'mtDNA_change_adjust_BL', 'ETTV02kg_D') + xlab('6-month change in mtDNA-CN') + ylab('6-month change in VO2max')
+```
+
+```{r}
+ggplot(w.pheno, aes(Exercise.Sessions.Attended, ETTV02kg_D, col = as.factor(Diabetic))) + geom_point()
+ggplot(w.pheno, aes(Exercise.Sessions.Attended, ETTV02kg_D, col = as.factor(Sex))) + geom_point()
+
+# Supplemental Figure 1
+vo2max_lm = plot_lm(w.pheno, 'Exercise.Sessions.Attended2', 'ETTV02kg_D') + ylab('Change in VO2max over 6 months') + xlab('Exercise Sessions Attended')
+
+cor(w.pheno$Exercise.Sessions.Attended2, w.pheno$ETTV02kg_D, use = 'complete.obs')
+
+# Supplemental Figure 2
+bmi_lm = plot_lm(w.pheno, 'Exercise.Sessions.Attended2', 'ANTHROBMI_D') + ylab('Change in BMI over 6 months') + xlab('Exercise Sessions Attended')
+
+cor(w.pheno$Exercise.Sessions.Attended2, w.pheno$ANTHROBMI_D, use = 'complete.obs')
+
+
+vo2max_box = plot_box(w.pheno, 'ETTV02kg_D', 'Exercise') + ylab('Change in VO2max over 6 months')
+
+vo2max_box + vo2max_lm 
+
+
+bl_vo2max = plot_lm(w.pheno, 'ETTVO2kg0', 'deltaCT_PlateAdjust_BL') + xlab('Baseline VO2max') + ylab('Baseline mtDNA-CN') 
+
+final_vo2max = plot_lm(w.pheno, 'ETTVO2kg6', 'deltaCT_PlateAdjust_Final') + xlab('Final VO2max') + ylab('Final mtDNA-CN') 
+
+diff_vo2max = plot_lm(w.pheno, 'ETTV02kg_D', 'mtDNA_change') + xlab('6-month change in VO2max') + ylab('6-month change in mtDNA-CN') 
+
+bl_vo2max + final_vo2max
+```
+
+
+# change in mt
+## age sex
+```{r}
+plot_lm(w.pheno, 'Age', 'mtDNA_change')
+plot_box(w.pheno, 'mtDNA_change', 'Sex')
+```
+
+
+# why bimodal distribution for non-exercisers?
+```{r}
+no.shape2 = w.pheno
+no.exercisers = subset(no.shape2, Exercise == 'No')
+no.exercisers$Diabetes %>% table
+ggplot(no.exercisers, aes(mtDNA_change, col = Diabetes)) + geom_density() + geom_rug()
+ggplot(no.exercisers, aes(mtDNA_change, col = Gender)) + geom_density() + geom_rug()
+ggplot(no.exercisers, aes(mtDNA_change, col = Ethnicity)) + geom_density() + geom_rug()
+table(noshape2$Ethnicity)
+
+```
+
+# change in vo2max
+```{r}
+no.shape2$VO2max_change = no.shape2$ETTVO2kg6 - no.shape2$ETTVO2kg0
+
+lm(VO2max_change ~ Percent.Exercise.Sessions.Attended, data = subset(no.shape2, Exercise == 'Yes')) %>% summary
+lm(mtDNA_change ~ VO2max_change, data = no.shape2) %>% summary
+lm(mtDNA_change ~ VO2max_change, data = subset(no.shape2, Diabetes == 'Yes')) %>% summary
+lm(mtDNA_change ~ VO2max_change, data = subset(no.shape2, Diabetes == 'No')) %>% summary
+
+ggplot(no.shape2, aes(VO2max_change, mtDNA_change, col = Diabetes)) + geom_point() + geom_smooth(method = 'lm')
+
+ggplot(no.shape2, aes(VO2max_change, mtDNA_change, col = Exercise)) + geom_point() + geom_smooth(method = 'lm')
+
+```
+
+# Load
+```{r}
+getwd()
+# saveRDS(w.pheno, file = 'pheno.rds')
+
+w.pheno = readRDS('pheno.rds')
+```
+
+# Change into format where can use mixed models:
+```{r}
+# Need: Age, Sex, RMR, WHR, DXALEANMASS, MetSyn, QUICKI, Gluc, HBA1c, BMI
+baseline = dplyr::select(w.pheno, Subject, Study, Age, Sex, deltaCT_PlateAdjust_BL, RMR_Estimated_0, ANTHROWHR0, DXALeanMass0, MSMetsyn0, QUICKI0, Gluc0, HA1C0, ANTHROBMI0, Diabetes, ETTVO2kg0, Diabetic) %>% mutate(mtDNA_CN = deltaCT_PlateAdjust_BL, Visit = "Baseline", RMR = RMR_Estimated_0, WHR = ANTHROWHR0, DXALeanMass = DXALeanMass0, MSMetsyn = MSMetsyn0, QUICKI = QUICKI0, Gluc = Gluc0, HbA1c = HA1C0, BMI = ANTHROBMI0, ETTVO2kg = ETTVO2kg0, Diabetic = Diabetic)
+baseline2 = na.omit(baseline)
+
+final = dplyr::select(w.pheno, Subject, Study, Age, Sex, deltaCT_PlateAdjust_Final, RMR_Estimated_6, ANTHROWHR6, DXALeanMass6, MSMetsyn6, QUICKI6, Gluc6, HA1C6, ANTHROBMI6, Diabetes, ETTVO2kg6, Diabetic) %>% mutate(mtDNA_CN = deltaCT_PlateAdjust_Final, Visit = "Final", RMR = RMR_Estimated_6, WHR = ANTHROWHR6, DXALeanMass = DXALeanMass6, MSMetsyn = MSMetsyn6, QUICKI = QUICKI6, Gluc = Gluc6, HbA1c = HA1C6, BMI = ANTHROBMI6, ETTVO2kg = ETTVO2kg6, Diabetic = Diabetic)
+final2 = na.omit(final)
+
+bothvis = rbind.fill(baseline2, final2) %>% select(Subject, Study, Visit, Age, Sex, mtDNA_CN, RMR, WHR, DXALeanMass, MSMetsyn, QUICKI, Gluc, HbA1c, Diabetes, BMI, ETTVO2kg, Diabetic)
+```
+
+## save
+```{r}
+getwd()
+saveRDS(bothvis, file = 'bothvis.rds')
+```
+
+# Mixed models:
+```{r}
+bothvis = readRDS(file = '../bothvis.rds')
+
+library(lme4)
+bothvis$Subject = as.factor(bothvis$Subject)
+```
+
+## function
+```{r}
+check = function(variable = 'DXALeanMass', bothvis){
+  form = as.formula(paste0(variable, ' ~ mtDNA_CN + Age + as.factor(Sex) + Visit + (1|Subject)'))
+  m = lmer(form, data = bothvis)
+  coefs = coef(summary(m))
+  return = (coefs['mtDNA_CN',])
+  p = 2*pt(q=abs(as.numeric(return[3])), lower.tail=FALSE, df = 240)
+  return_vector = c(variable, as.numeric(return[1]), as.numeric(return[2]), p)
+  return(return_vector)
+}
+```
+
+### do for all:
+```{r}
+dxa = check("DXALeanMass", bothvis)
+insulin = check("QUICKI", bothvis)
+rmr = check("RMR", bothvis)
+gluc = check("Gluc", bothvis)
+
+# MetSyn on its own: 
+bothvis$MSMetsyn = as.factor(bothvis$MSMetsyn)
+
+form = as.formula(paste0(variable, ' ~ mtDNA_CN + Age + as.factor(Sex) + Visit + (1|Subject)'))
+m = glmer(form, data = bothvis, family = 'binomial')
+coefs = coef(summary(m))
+return = (coefs['mtDNA_CN',])
+p = 2*pt(q=abs(as.numeric(return[3])), lower.tail=FALSE, df = 240)
+metsyn = c(variable, as.numeric(return[1]), as.numeric(return[2]), p)
+
+hb1ac = check("HbA1c", bothvis)
+```
+
+### make table
+```{r}
+library(htmlTable)
+
+full = as.data.frame(rbind(dxa, insulin, rmr, gluc, metsyn, hb1ac))
+colnames(full) = c('var', 'beta', 'std', 'p')
+
+full$beta = as.numeric(full$beta)
+full$std = as.numeric(full$std)
+full$p = as.numeric(full$p)
+full$p.adjust = p.adjust(full$p, method = 'fdr')
+
+for_show = full
+for_show$beta = formatbeta(for_show$beta)
+for_show$std = formatbeta(for_show$std)
+for_show$p = formatpval(for_show$p)
+for_show$p.adjust = formatpval(for_show$p.adjust)
+
+for_show$var = c('Muscle mass', 'Insulin sensitivity', 'Resting metabolic rate', 'Baseline glycemia', 'Metabolic syndrome', 'HbA1c')
+htmlTable(for_show, rnames = rep('', nrow(full)), header = c('Secondary outcome', 'Effect size estimate', 'Standard error', 'P-value', 'FDR-adjusted P-value'))
+```
+
+### check quicki
+```{r}
+form = as.formula(paste0('QUICKI ~ mtDNA_CN + Age + as.factor(Sex) + Visit + (1|Subject) + Diabetic'))
+
+m = lmer(form, data = bothvis)
+coefs = coef(summary(m))
+return = (coefs['mtDNA_CN',])
+p = 2*pt(q=abs(as.numeric(return[3])), lower.tail=FALSE, df = 240)
+return_vector = c('QUICKI', as.numeric(return[1]), as.numeric(return[2]), p)
+
+# add drug info?
+library(readxl)
+meds = read_excel('../../../../static/mito/SHAPE/phenotypes/MedicationsS3_5.xlsx')
+colnames(meds) = make.names(colnames(meds))
+meds$MEDInsulin
+
+# Only one individual on insulin
+# You looked at statins and they weren't significant
+```
+
+## adjust for MetSyn
+```{r}
+check_metsyn = function(variable = 'DXALeanMass', bothvis){
+  form = as.formula(paste0(variable, ' ~ mtDNA_CN + MSMetsyn + Age + as.factor(Sex) + Visit + (1|Subject)'))
+  m = lmer(form, data = bothvis)
+  coefs = coef(summary(m))
+  return = (coefs['mtDNA_CN',])
+  p = 2*pt(q=abs(as.numeric(return[3])), lower.tail=FALSE, df = 240)
+  return_vector = c(variable, as.numeric(return[1]), as.numeric(return[2]), p)
+  return(return_vector)
+}
+```
+
+### run for all
+```{r}
+dxa = check_metsyn("DXALeanMass", bothvis)
+insulin = check_metsyn("QUICKI", bothvis)
+rmr = check_metsyn("RMR", bothvis)
+gluc = check_metsyn("Gluc", bothvis)
+hb1ac = check_metsyn("HbA1c", bothvis)
+```
+
+### make table:
+```{r}
+full = as.data.frame(rbind(dxa, insulin, rmr, gluc, hb1ac))
+colnames(full) = c('var', 'beta', 'std', 'p')
+
+full$beta = as.numeric(full$beta)
+full$std = as.numeric(full$std)
+full$p = as.numeric(full$p)
+full$p.adjust = p.adjust(full$p, method = 'fdr')
+
+for_show = full
+for_show$beta = formatbeta(for_show$beta)
+for_show$std = formatbeta(for_show$std)
+for_show$p = formatpval(for_show$p)
+for_show$p.adjust = formatpval(for_show$p.adjust)
+
+for_show$var = c('Muscle mass', 'Insulin sensitivity', 'Resting metabolic rate', 'Baseline glycemia', 'HbA1c')
+htmlTable(for_show, rnames = rep('', nrow(full)), header = c('Secondary outcome', 'Effect size estimate', 'Standard error', 'P-value', 'FDR-adjusted P-value'))
+```
+
+
