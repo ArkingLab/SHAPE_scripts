@@ -1,0 +1,235 @@
+---
+output:
+  pdf_document: default
+---
+
+```{r setup, echo = F}
+library(ggplot2)
+library(dplyr)
+library(knitr)
+opts_knit$set(root.dir = "~/jhpce/dcs01/arking/arkinglab/active/projects/mito/SHAPE")
+# setwd("~/jhpce/dcs01/arking/arkinglab/active/projects/mito/SHAPE")
+```
+
+```{r}
+# location of plate maps for sequenom: /dcs01/arking/arkinglab/active/projects/mito/SHAPE/SHAPE MassArray Sequenom Plate-Maps
+```
+
+```{r}
+library(readxl)
+
+plates1_4 <- read_excel("/Volumes/JHPCE 2/dcs01/static/mito/SHAPE/Sequenom/SHAPE MassArray Sequenom 3.29.18/PlateData_SHAPE 1-4_March 2018.xlsx", 
+    sheet = "SHAPE Plate 1-4, Labeled")
+
+plates5_7 <- read_excel("/Volumes/JHPCE 2/dcs01/static/mito/SHAPE/Sequenom/SHAPE MassArray Sequenom 3.29.18/PlateData_SHAPE 5-7_March 2018.xlsx", 
+    sheet = "SHAPE Plate 5-7, Labeled Data")
+
+colnames(plates1_4) <- make.names(colnames(plates1_4), unique=TRUE)
+colnames(plates5_7) <- make.names(colnames(plates5_7), unique=TRUE)
+```
+
+```{r}
+# subset columns you care about
+p1_4_care <- plates1_4[, c(2, 3, 5, 6, 7)]
+colnames(p1_4_care)[1] <- 'Well'
+p5_7_care <- plates5_7[, c(2, 3, 5, 6, 7)]
+colnames(p5_7_care)[1] <- 'Well'
+
+# put in the correct subject identifier using a key
+# updated and corrected sheet.
+key <- read_excel("/Volumes/JHPCE 2/dcs01/active/projects/SHAPE/archive/jason_2.9.18_qpcr_results/SHAPE Biomek 4000 Final Excel Sheet.6-11-18.xlsx")
+colnames(key) <- make.names(colnames(key))
+check = as.data.frame(table(key$`Sample ID`))
+subset(check, Freq == 2)
+check = as.data.frame(table(key$`Subject`))
+subset(check, Freq > 1)
+
+# 2219 shows up 3 times, 3052 shows up 4 times. there's a clear problem here. 
+
+nrow(subset(key, Final.Well.Location.on.MassArray.Sequenom.CHIP == 'A1'))
+
+key$Subj.Vis <- paste(key$Subject, key$Visit)
+key$Well <- key$Final.Well.Location.on.MassArray.Sequenom.CHIP
+
+key1_4 <- subset(key, X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate1' | X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate2' | X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate3' | X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate4')
+key5_7 <- subset(key, X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate5' | X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate6' | X96.well.Dilution.Plate.Name == 'SHAPEDilutionPlate7')
+
+key1_4 <- dplyr::select(key1_4, Well, Subj.Vis)
+key5_7 <- dplyr::select(key5_7, Well, Subj.Vis)
+
+
+p1_4_care <- merge(p1_4_care, key1_4, by = "Well", all.x = T)
+p5_7_care <- merge(p5_7_care, key5_7, by = "Well", all.x = T)
+
+# put together
+all_samps <- rbind(p1_4_care, p5_7_care)
+
+# omit wells that don't have samples
+all_samps_nonas <- all_samps[-which(is.na(all_samps$Subj.Vis)),]
+
+# save.image('RDatas/sequenom_checks.RData')
+```
+
+# Check missingness (assay)
+```{r}
+# omit low probability and aggressive calls
+all_samps_nonas$Call[which(all_samps_nonas$Description == 'D.Low Probability' | all_samps_nonas$Description == 'C.Aggressive')] <- NA
+
+library(tidyverse)
+no_nas = all_samps_nonas[-which(is.na(all_samps_nonas$Call)),]
+no_nas %>% group_by(Assay.Id) %>% summarise(Count = n()) -> hi
+
+hi$Missing.Percent = (hi$Count/527) * 100
+
+# remove albumin from consideration
+hi[-grep('albumin', hi$Assay.Id),]
+p = ggplot(hi, aes(Missing.Percent)) + geom_density() + geom_rug() + ggtitle('Missingness by assay ID')
+labs = subset(hi, Missing.Percent < 60)
+p + geom_text(data = labs, aes(Missing.Percent, y = 0.1, label = Assay.Id, vjust = -0.5), angle = 90, col = 'black') + geom_vline(xintercept = labs$Missing.Percent, lty = 2, colour = "gray50")
+
+# This doesn't look too bad. 
+```
+
+# Check missingness (sample)
+```{r}
+# Ignore albumin.
+no_alb = no_nas[-grep('albumin', no_nas$Assay.Id),]
+unique(no_alb$Assay.Id) %>% length
+
+no_alb %>% group_by(Subj.Vis) %>% summarise(Count = n()) -> hi
+
+hi$Missing.Percent = (hi$Count/47) * 100
+
+p = ggplot(hi, aes(Missing.Percent)) + geom_density() + geom_rug() + ggtitle('Missingness by individual sample')
+
+labs = subset(hi, Missing.Percent < 45 | Missing.Percent > 100)
+p + geom_text(data = labs, aes(Missing.Percent, y = 0.1, label = Subj.Vis, vjust = -0.5), angle = 90, col = 'black') + geom_vline(xintercept = labs$Missing.Percent, lty = 2, colour = "gray50")
+
+only_reason = subset(hi, Missing.Percent <= 100)
+p2 = ggplot(only_reason, aes(Missing.Percent)) + geom_density() + geom_rug() + ggtitle('Missingness by individual sample')
+labs2 = subset(only_reason, Missing.Percent < 50)
+p2 + geom_text(data = labs2, aes(Missing.Percent, y = 0.1, label = Subj.Vis, vjust = -0.5), angle = 90, col = 'black') + geom_vline(xintercept = labs2$Missing.Percent, lty = 2, colour = "gray50") + theme_classic()
+
+# remove samples with too high missingness: fewer than 50% calls.
+missingness_high = labs2$Subj.Vis
+saveRDS(missingness_high, file = '/Volumes/JHPCE 2/dcs01/active/projects/SHAPE/R_objects/bad_samples3.rds')
+```
+
+# Check the three samples that are duplicated: BL 2219, BL 3052, Final 3052.
+```{r}
+df <- all_samps_nonas
+
+library(data.table)
+dt <- data.table(df)
+
+#variable = Assay.Id
+#value = Call
+
+dt$Description <- NULL
+dt$Sample.Id <- NULL
+
+getwells = dt[,1:4]
+getwells$Assay_Subj = paste0(getwells$Assay.Id, '_', getwells$Subj.Vis)
+all = getwells[getAllDups(getwells$Assay_Subj),]
+dplyr::select(all, Subj.Vis, Well) %>% unique
+
+isdup <- dt[,1:4]
+
+first <- isdup[which(duplicated(isdup, by = c('Assay.Id', 'Subj.Vis')) == T),]
+last <- isdup[which(duplicated(isdup, by = c('Assay.Id', 'Subj.Vis'), fromLast = T) == T),]
+first$Subj.Vis <- paste0(first$Subj.Vis, '_1')
+last$Subj.Vis <- paste0(last$Subj.Vis, '_2')
+
+both <- rbind(first, last)
+ord <- order(both$Subj.Vis, both$Assay.Id)
+both <- both[ord,]
+unique(both$Subj.Vis)
+
+final_2219 = isdup[which(isdup$Subj.Vis == '2219 Final'),]
+full = rbind(both, final_2219)
+
+look_dups <- dcast(full, Subj.Vis ~ Assay.Id, value.var = 'Call')
+View(look_dups)
+View(full)
+
+```
+
+# remove BL 2219 (2nd set), BL 3052, and Final 3052 from the final dataset.
+```{r}
+dplyr::select(full, Well, Subj.Vis) %>% unique -> bad_dups
+bad_wells = bad_dups$Well[-c(1, 7)]
+bad_subjs = c('2219 Baseline', '3052 Baseline', '3052 Final')
+removed_dups = dt[-which(dt$Well %in% bad_wells & dt$Subj.Vis %in% bad_subjs),]
+bad_samples_1 = dt[which(dt$Well %in% bad_wells & dt$Subj.Vis %in% bad_subjs),] 
+bad_samples_1$Subj.Vis %>% unique
+
+# cast into final shape
+sequenom_data <- dcast(removed_dups, Subj.Vis ~ Assay.Id, value.var = 'Call')
+sequenom_data = subset(sequenom_data, Subj.Vis %!in% missingness_high)
+```
+
+```{r}
+# check the baselines and the finals
+sequenom_data$Subject <- as.factor(substr(sequenom_data$Subj.Vis, 1, 4))
+sequenom_data$Visit <- as.factor(substr(sequenom_data$Subj.Vis, 6, 20))
+# Charles says we can ignore albumin calls --> doing that now
+sequenom_data2 <- as.data.frame(sequenom_data[,-c(2,3,4,5,6)])
+results[-which(is.na(results$Percent.synonymous) & results$Percent.synonymous == 'NaN'),] %>% nrow
+
+length(unique(sequenom_data2$Subject))
+
+results <- data.frame(matrix(nrow = length(unique(sequenom_data2$Subject))
+, ncol = 4))
+colnames(results) <- c('Subject', 'Overlapping.calls', 'Synonymous.calls', 'Percent.synonymous')
+
+bad_samples <- data.frame()
+
+for(i in 1:length(unique(sequenom_data2$Subject)))
+{
+  overlaps <- 0
+  ifsame <- 0
+  compare <- subset(sequenom_data2, Subject == unique(sequenom_data2$Subject)[i])
+  place <- as.character(compare$Subject[1])
+  results$Subject[i] <- place
+  if(nrow(compare) == 2)
+  {
+    for(colcount in 2:(ncol(compare)-2)) # looping through snp columns
+    {
+      if(!(is.na(compare[1,colcount]) | is.na(compare[2,colcount]))) {
+        if(identical(compare[1,colcount], compare[2,colcount])){
+          ifsame <- ifsame + 1
+        }
+        overlaps <- overlaps + 1
+      } 
+      results$Overlapping.calls[i] <- overlaps    
+      results$Synonymous.calls[i] <- ifsame   
+    }
+  } else{
+    results$Overlapping.calls[i] <- NA    
+    results$Synonymous.calls[i] <- NA    
+  }
+}
+
+results$Percent.synonymous <- (results$Synonymous.calls/results$Overlapping.calls)
+
+# make pretty
+View(results[, 1:4])
+
+p = ggplot(results, aes(Percent.synonymous)) + geom_rug() + geom_density()
+labs = subset(results, Percent.synonymous < .75)
+p + geom_text(data = labs, aes(Percent.synonymous, y = 10, label = Subject, vjust = -0.5), angle = 90, col = 'black') + geom_vline(xintercept = labs$Percent.synonymous, lty = 2, colour = "gray50") + geom_vline(xintercept = 0.9, col = 'red') + theme_classic()
+```
+
+
+```{r}
+# people who have no matches
+mismatched <- subset(results, Percent.synonymous < .9)
+bad_samples_2 = mismatched
+
+bad_samples_1 = bad_subjs
+bad_wells_1 = bad_wells
+
+saveRDS(bad_samples_1, file = '/Volumes/JHPCE 2/dcs01/active/projects/SHAPE/R_objects/bad_samples1.rds')
+saveRDS(bad_wells_1, file = '/Volumes/JHPCE 2/dcs01/active/projects/SHAPE/R_objects/bad_wells1.rds')
+saveRDS(bad_samples_2, file = '/Volumes/JHPCE 2/dcs01/active/projects/SHAPE/R_objects/bad_samples2.rds')
+```

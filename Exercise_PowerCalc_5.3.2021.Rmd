@@ -1,0 +1,40 @@
+# 5.3.2020
+# This script calculates power for observing effects of exercise!
+
+# thuyvy's power function:
+```{r}
+gotta_power = function(data, trait, power_per) {
+  #'@param trait - ECG trait
+  #'@param power_per - power, as a decimal
+  ptab <- cbind(NULL, NULL)
+  for (i in seq(from = 0.02, to = 1, by = 0.02)) {
+    pwrt <-
+      power.t.test(
+        delta = ((mean(data[,trait])*i)+mean(data[,trait]))-mean(data[,trait]),
+        sd = sd(data[,trait]),
+        power = power_per,
+        type = "two.sample",
+        alternative = "two.sided"
+      )
+    ptab <- rbind(ptab, cbind(pwrt$delta, pwrt$n, i*100))
+  }
+  power_table = as.data.frame(ptab)
+  names(power_table) = c("delta", "n", "percent")
+  power_table<<-power_table
+}
+```
+
+# read data
+```{r}
+df = readRDS('/Volumes/JHPCE 2/dcs01/active/projects/SHAPE/R_objects/final_shape35_dataset.rds')
+noNA = df[-which(is.na(df$mtDNA_change)),]
+gotta_power(noNA, 'mtDNA_change', 0.8)
+
+power.t.test(
+        n = nrow(noNA),
+        sd = sd(noNA$mtDNA_change),
+        power = 0.8,
+        type = "two.sample",
+        alternative = "two.sided"
+      )
+```
